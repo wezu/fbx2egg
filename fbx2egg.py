@@ -1,29 +1,27 @@
 import os, sys
 
 def buildVertexData(fbx_data, vertId, rgba, uv, tbnId=None):
-    i=3
     if tbnId==None:
         tbnId=vertId
-        i=1
-    xyz=(fbx_data['Vertices'][index][int(vertId)*i],
-         fbx_data['Vertices'][index][int(vertId)*i+1],
-         fbx_data['Vertices'][index][int(vertId)*i+2])
+    xyz=(fbx_data['Vertices'][index][int(vertId)*3],
+         fbx_data['Vertices'][index][int(vertId)*3+1],
+         fbx_data['Vertices'][index][int(vertId)*3+2])
     try:     
-        n=(fbx_data['Normals'][index][int(tbnId)*i],
-           fbx_data['Normals'][index][int(tbnId)*i+1],
-           fbx_data['Normals'][index][int(tbnId)*i+2])
+        n=(fbx_data['Normals'][index][int(tbnId)*3],
+           fbx_data['Normals'][index][int(tbnId)*3+1],
+           fbx_data['Normals'][index][int(tbnId)*3+2])
     except:        
         n=None
     try:    
-        t=(fbx_data['Tangents'][index][int(tbnId)*i],
-           fbx_data['Tangents'][index][int(tbnId)*i+1],
-           fbx_data['Tangents'][index][int(tbnId)*i+2])
+        t=(fbx_data['Tangents'][index][int(tbnId)*3],
+           fbx_data['Tangents'][index][int(tbnId)*3+1],
+           fbx_data['Tangents'][index][int(tbnId)*3+2])
     except:        
         t=None
     try:    
-        b=(fbx_data['Binormals'][index][int(tbnId)*i],
-           fbx_data['Binormals'][index][int(tbnId)*i+1],
-           fbx_data['Binormals'][index][int(tbnId)*i+2])
+        b=(fbx_data['Binormals'][index][int(tbnId)*3],
+           fbx_data['Binormals'][index][int(tbnId)*3+1],
+           fbx_data['Binormals'][index][int(tbnId)*3+2])
     except:        
         b=None      
     if rgba:
@@ -178,7 +176,7 @@ for index, group in enumerate(egg_data['Group']):
     #in "Direct" some verts are implicit and we need to rebuild the vert and poly table                      
     if len(fbx_data['Normals'][index])==len(fbx_data['Vertices'][index]):        
         for vertId, data in enumerate(fbx_data['Vertices'][index]):           
-            if vertId+2<len(fbx_data['Vertices'][index]): 
+            if vertId*3+2<len(fbx_data['Vertices'][index]): 
                 vert_dict=buildVertexData(fbx_data, vertId, temp_color, temp_uv)                        
                 egg_data['Vertex'][group['name']].append(vert_dict) 
         for polygon in temp_poly:  
