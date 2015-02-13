@@ -78,7 +78,7 @@ fbx_format={'Vertices':        lambda x: x.strip('a: ').split(','),
         'UVIndex':             lambda x: x.strip('a: ').split(','),
         'Colors':              lambda x: x.strip('a: ').split(','),
         'ColorIndex':          lambda x: x.strip('a: ').split(','),
-        'Model:':               lambda x: (last_line.split(',')[0].strip('Model: '), last_line.split(',')[1].strip('"Model:: "'),last_line.split(',')[2].strip(' {')),
+        'Model:':              lambda x: (last_line.split(',')[0].strip('Model: '), last_line.split(',')[1].strip('"Model:: "'),last_line.split(',')[2].strip(' {')),
         'Node':                lambda x: last_line.split(' ')[1],
         'Matrix':              lambda x: x.strip('a: ').split(','),
         'Deformer':            lambda x: None,
@@ -86,9 +86,9 @@ fbx_format={'Vertices':        lambda x: x.strip('a: ').split(','),
         'Weights':             lambda x: None,
         'Transform':           lambda x: None,
         'TransformLink':       lambda x: None,
-        'Texture:':            lambda x: None,
-        'RelativeFilename':    lambda x: None,
-        'C: ':                 lambda x: None,
+        'Texture:':            lambda x: (last_line.split(',')[0].strip('Texture: '), last_line.split(',')[1].strip('"Texture:: "')),
+        'RelativeFilename':    lambda x: (last_line.split(': ')[1].strip('"')),# if last_line_type=='Texture:' else None),
+        'C: ':                 lambda x: (last_line.split(',')),
         'AnimationCurve':      lambda x: None,
         'KeyValueFloat':       lambda x: None,
         'Material:':           lambda x: None,
@@ -121,19 +121,60 @@ with open(in_file,'r') as fbx:
 egg_data={'Group':[],#{'name':'', id:''}
           'Vertex':{},#{'xyz':[], 'n':[], 'b':[], 't':[], 'uv':[], 'rgba':[]}
           'Polygon':{},#{'TRef':[],'VertexRef':[], 'id':''}???
-          'Joint':[]#{'name:'', 'id':'', 'Transform':[], 'VertexRef':[(vertId,weight)]}???
+          'Joint':[],#{'name:'', 'id':'', 'Transform':[], 'VertexRef':[(vertId,weight)]}???
+          'Texture':{}
           }
 #find groups and joints
 for group in fbx_data['Model:']:
     if group[2]=='"Mesh"':
         egg_data['Group'].append({'name':group[1], 'id':group[0]})
-        egg_data['Vertex'][group[1]]=[]
-        egg_data['Polygon'][group[1]]=[]
+        egg_data['Vertex'][group[0]]=[]
+        egg_data['Polygon'][group[0]]=[]
+        egg_data['Texture'][group[0]]=[]
     elif group[2]=='"LimbNode"':
         egg_data['Joint'].append({'name':group[1], 'id':group[0]})
     else:
         print "Unsupported Model type {0}".format(group[2])
-        
+ 
+#find textures
+#in the fbx a texture is linked to a material, and the material is linked to a mesh
+#in egg a texture is linked per polygon, but since there is o such info in the fbx
+#we will link the texture to a group and apply it to each polygon in that group 
+#in the fbx a texture can be described as DiffuseColor, Bump, NormalMap, EmissiveColor etc
+#I'll try to turn that into a valid egg 'envtype' and use '<Scalar> envtype { modulate }' where I can't find a match 
+known_tex_type={' "DiffuseColor"':              'modulate',
+                ' "TransparentColor"':          'modulate', #??
+                ' "Bump"':                      'normal',#or height? or normal_height?
+                ' "NormalMap"':                 'normal',
+                ' "EmissiveColor"':             'glow',
+                ' "DisplacementColor"':         'height',#??
+                ' "SpecularColor"':             'gloss',
+                ' "ReflectionColor"':           'gloss',#??
+                ' "AmbientColor"':              'modulate',#??
+                ' "VectorDisplacementColor"':   'height'#??
+                }
+for tex in fbx_data['Texture:']:
+    id=tex[0]
+    material=None
+    group_id=None
+    file=fbx_data['RelativeFilename'][fbx_data['Texture:'].index(tex)]
+    type=None
+    #find the material
+    for connection in fbx_data['C: ']:
+        if connection[1]==id:
+            material=connection[2]
+            type=connection[3]
+    #find the mesh/group        
+    for connection in fbx_data['C: ']:
+        if connection[1]==material:
+            group_id=connection[2]   
+    #translate the type
+    if type in known_tex_type:
+        type=known_tex_type[type]
+    else:
+        type='modulate'
+    egg_data['Texture'][group_id].append({'file':file, 'type':type})
+   
 #build the data
 for index, group in enumerate(egg_data['Group']):  
     temp_poly=[]
@@ -178,50 +219,71 @@ for index, group in enumerate(egg_data['Group']):
         for vertId, data in enumerate(fbx_data['Vertices'][index]):           
             if vertId*3+2<len(fbx_data['Vertices'][index]): 
                 vert_dict=buildVertexData(fbx_data, vertId, temp_color, temp_uv)                        
-                egg_data['Vertex'][group['name']].append(vert_dict) 
+                egg_data['Vertex'][group['id']].append(vert_dict) 
         for polygon in temp_poly:  
             new_poly=[]
             for vertId in polygon:
                 new_poly.append(vertId)
-            egg_data['Polygon'][group['name']].append(new_poly)                                     
+            egg_data['Polygon'][group['id']].append(new_poly)                                     
     else: 
         id=0
         for polygon in temp_poly:
             new_poly=[]
             for vertId in polygon:
                 vert_dict=buildVertexData(fbx_data, vertId, temp_color, temp_uv, id)
-                egg_data['Vertex'][group['name']].append(vert_dict)
+                egg_data['Vertex'][group['id']].append(vert_dict)
                 new_poly.append(id) 
                 id+=1
-            egg_data['Polygon'][group['name']].append(new_poly) 
+            egg_data['Polygon'][group['id']].append(new_poly) 
                         
 #write the egg file   
 with open(out_file,'w') as egg:
     #TODO: get "UpAxis" from FBX
     egg.write('<CoordinateSystem> { Z-Up }\n\n')
-    #TODO: Textures go here
+    #Textures
+    for tex in egg_data['Texture']:
+        for index, temp in enumerate(egg_data['Texture'][tex]):        
+            egg.write('<Texture> Tex{0} {{\n'.format(index))
+            egg.write('{file}\n'.format(**egg_data['Texture'][tex][index]))
+            #TODO: this should be set in the GUI.. once a GUI exist
+            egg.write('<Scalar> format { rgb }\n')
+            egg.write('<Scalar> wrapu { repeat }\n')
+            egg.write('<Scalar> wrapv { repeat }\n')
+            egg.write('<Scalar> minfilter { linear_mipmap_linear }\n')
+            egg.write('<Scalar> magfilter { linear }\n')
+            egg.write('<Scalar> envtype {{ {type} }}\n'.format(**egg_data['Texture'][tex][index]))
+            #TODO: stage-name, compression, anisotropic-degree, alpha
+            egg.write('}\n')
     for index, group in enumerate(egg_data['Group']):            
         egg.write('<Group> {name} {{\n'.format(**group))
         egg.write('    <VertexPool> {name}.verts {{\n'.format(**group))
-        for id, vertex in enumerate(egg_data['Vertex'][group['name']]):
+        for id, vertex in enumerate(egg_data['Vertex'][group['id']]):
+            v_data=egg_data['Vertex'][group['id']][id]
             egg.write('        <Vertex> {0} {{\n'.format(id))
-            egg.write('        {xyz[0]} {xyz[1]} {xyz[2]}\n'.format(**egg_data['Vertex'][group['name']][id]))
-            egg.write('            <Normal> {{ {n[0]} {n[1]} {n[2]} }}\n'.format(**egg_data['Vertex'][group['name']][id]))
+            egg.write('        {xyz[0]} {xyz[1]} {xyz[2]}\n'.format(**v_data))
+            egg.write('            <Normal> {{ {n[0]} {n[1]} {n[2]} }}\n'.format(**v_data))
+            if v_data['rgba']:    
+                egg.write('            <RGBA> {{ {rgba[0]} {rgba[1]} {rgba[2]} {rgba[3]} }}\n'.format(**v_data))
             egg.write('            <UV> {\n')
-            egg.write('                {uv[0]} {uv[1]}\n'.format(**egg_data['Vertex'][group['name']][id]))   
-            if egg_data['Vertex'][group['name']][id]['t']:   
-                egg.write('                <Tangent> {{ {t[0]} {t[1]} {t[2]} }}\n'.format(**egg_data['Vertex'][group['name']][id]))
-            if egg_data['Vertex'][group['name']][id]['b']:    
-                egg.write('                <Binormal> {{ {b[0]} {b[1]} {b[2]} }}\n'.format(**egg_data['Vertex'][group['name']][id]))
+            egg.write('                {uv[0]} {uv[1]}\n'.format(**v_data))   
+            if v_data['t']:   
+                egg.write('                <Tangent> {{ {t[0]} {t[1]} {t[2]} }}\n'.format(**v_data))
+            if v_data['b']:    
+                egg.write('                <Binormal> {{ {b[0]} {b[1]} {b[2]} }}\n'.format(**v_data))
             egg.write('            }\n')
             egg.write('        }\n')
         egg.write('    }\n')     
-        for poly in egg_data['Polygon'][group['name']]:
+        for poly in egg_data['Polygon'][group['id']]:
             egg.write('    <Polygon> {\n')
             egg.write('    <VertexRef> {  ')
             for v in poly:
                 egg.write(str(v)+" ")
             egg.write(' <Ref> {{ {name}.verts }} }}\n'.format(**group))
+            #textures
+            for tex in egg_data['Texture']:
+                if tex==group['id']:
+                    for i, temp in enumerate(egg_data['Texture'][tex]):
+                        egg.write('    <TRef> {{ Tex{0} }}\n'.format(i))
             egg.write('    }\n')
         egg.write('}')
   
