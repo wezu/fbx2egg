@@ -1,9 +1,15 @@
 import os, sys
 
-def getTransform(line, cut):
+def add(s1, s2):
+    return float(s1)+float(s2)
+def mul(s1, s2):
+    return float(s1)*float(s2)
+    
+def getTransform(line):
     if fbx_data['Model:']:
         if fbx_data['Model:'][-1][2]=='"LimbNode"':
-            return (fbx_data['Model:'][-1][0], last_line.strip(cut).split(','))
+            data=last_line.split(',')
+            return (fbx_data['Model:'][-1][0], last_line.split(',')[-3:])
     return None    
     
 def buildVertexData(index, fbx_data, vertId, rgba, uv, group_name, tbnId=None):
@@ -48,7 +54,10 @@ def buildVertexData(index, fbx_data, vertId, rgba, uv, group_name, tbnId=None):
     
 in_file=sys.argv[1]
 out_file=sys.argv[2]
-
+out_anim_file=None
+if len(sys.argv)>3:
+    out_anim_file=sys.argv[3]
+    
 #what are we looking for in the fbx?
 fbx_data={'Vertices':[],
         'PolygonVertexIndex':[],
@@ -80,7 +89,12 @@ fbx_data={'Vertices':[],
         'P: "EmissiveColor"':[], #material emissive
         'P: "Lcl Translation"':[],
         'P: "Lcl Rotation"':[],
-        'P: "Lcl Scaling"':[]
+        'P: "Lcl Scaling"':[],
+        'P: "UpAxis"':[],
+        'P: "UpAxisSign"':[],
+        'P: "FrontAxis"':[],
+        'P: "FrontAxisSign"':[],
+        'KeyTime':[]
         }
 #how to format the data?
 fbx_format={'Vertices':        lambda x: x.strip('a: ').split(','),
@@ -103,17 +117,22 @@ fbx_format={'Vertices':        lambda x: x.strip('a: ').split(','),
         'Texture:':            lambda x: (last_line.split(',')[0].strip('Texture: '), last_line.split(',')[1].strip('"Texture:: "')),
         'RelativeFilename':    lambda x: (last_line.split(': ')[1].strip('"') if last_line_type=='Texture:' else None),
         'C: ':                 lambda x: (last_line.split(',')),
-        'AnimationCurve':      lambda x: None,
-        'KeyValueFloat':       lambda x: None,
+        'AnimationCurve':      lambda x: last_line.split(',')[0].strip('AnimationCurve: '),
+        'KeyValueFloat':       lambda x: (fbx_data['AnimationCurve'][-1], x.strip('a: ').split(',')),
         'Material:':           lambda x: None,
         'P: "DiffuseColor"':   lambda x: None,
         'P: "AmbientColor"':   lambda x: None,
         'P: "SpecularColor"':  lambda x: None,
         'P: "Shininess"':      lambda x: None,
         'P: "EmissiveColor"':  lambda x: None,
-        'P: "Lcl Translation"':lambda x: getTransform(last_line, 'P: "Lcl Translation", "Lcl Translation", "", "A",'),#lambda got too long, made a named function        
-        'P: "Lcl Rotation"':   lambda x: getTransform(last_line, 'P: "Lcl Rotation", "Lcl Rotation", "", "A",'),
-        'P: "Lcl Scaling"':    lambda x: getTransform(last_line, 'P: "Lcl Scaling", "Lcl Scaling", "", "A",')       
+        'P: "Lcl Translation"':lambda x: getTransform(last_line),#lambda got too long, made a named function        
+        'P: "Lcl Rotation"':   lambda x: getTransform(last_line),
+        'P: "Lcl Scaling"':    lambda x: getTransform(last_line),
+        'P: "UpAxis"':         lambda x: last_line.strip('P: "UpAxis", "int", "Integer", "",'),
+        'P: "UpAxisSign"':     lambda x: last_line.strip('P: "UpAxisSign", "int", "Integer", "",'),
+        'P: "FrontAxis"':      lambda x: last_line.strip('P: "FrontAxis", "int", "Integer", ""'),
+        'P: "FrontAxisSign"':  lambda x: last_line.strip('P: "FrontAxisSign", "int", "Integer", ""'),
+        'KeyTime':             lambda x: last_line.strip('KeyTime: *').strip(' }')
         }        
 
 line_type=None
@@ -138,8 +157,17 @@ egg_data={'Group':[],#{'name':'', id:''}
           'Vertex':{},#{'xyz':[], 'n':[], 'b':[], 't':[], 'uv':[], 'rgba':[]}
           'Polygon':{},#{'TRef':[],'VertexRef':[], 'id':''}???
           'Joint':[],#{'name:'', 'id':'', 'Transform':[], 'VertexRef':[(vertId,weight)]}???
-          'Texture':{}
+          'Texture':{},
+          'Axis':'Z-Up'
           }
+#get the CoordinateSystem
+#my exporter only let's me set the axis convetion to either z or y up, no other options
+#I won't even try to understand how this works
+if (fbx_data['P: "UpAxis"']==['1'] and fbx_data['P: "UpAxisSign"']==['1'] and fbx_data['P: "FrontAxis"']==['2'] and fbx_data['P: "FrontAxisSign"']==['1']):
+   egg_data['Axis']='Y-up'
+#else:  #the default already set  
+#    egg_data['Axis']='Z-up'
+        
 #find groups and joints
 for group in fbx_data['Model:']:
     if group[2]=='"Mesh"':
@@ -148,7 +176,7 @@ for group in fbx_data['Model:']:
         egg_data['Polygon'][group[0]]=[]
         egg_data['Texture'][group[0]]=[]
     elif group[2]=='"LimbNode"':
-        egg_data['Joint'].append({'name':group[1], 'id':group[0], 'verts':[]})
+        egg_data['Joint'].append({'name':group[1], 'id':group[0], 'verts':[], 'anim':[], 'v':[], 'AnimCurveNode':[]})
     else:
         print "Unsupported Model type {0}".format(group[2])
 #find textures
@@ -188,13 +216,24 @@ for tex in fbx_data['Texture:']:
         type=known_tex_type[type]
     else:
         type='modulate'
-    egg_data['Texture'][group_id].append({'file':file, 'type':type})
+    egg_data['Texture'][group_id].append({'file':file,
+                                        'stage-name':None,
+                                        'compression':None,
+                                        'anisotropic-degree':None,
+                                        'alpha':None,
+                                        'format':'rgb', 
+                                        'wrapu': 'repeat',
+                                        'wrapv': 'repeat', 
+                                        'minfilter':'linear_mipmap_linear ', 
+                                        'magfilter':'linear', 
+                                        'type':type})
     
 #joints
 #we need the transforms and hierarchy 
+#we also get some animation data (this will need another pass)
 for index, joint in enumerate(egg_data['Joint']):
     id=joint['id']
-    for connection in fbx_data['C: ']:
+    for connection in fbx_data['C: ']:        
         if connection[1]==id:
             #the connection can point to  
             if connection[2]=='0':#-RootNode            
@@ -203,6 +242,9 @@ for index, joint in enumerate(egg_data['Joint']):
                 egg_data['Joint'][index]['parent']=connection[2]
             else:#-SubDeformer (weights)
                 egg_data['Joint'][index]['deformer']=connection[2]
+        if connection[2]==id:        
+            if len(connection)==4:#AnimCurveNode  
+                egg_data['Joint'][index]['AnimCurveNode'].append((connection[1], connection[3]))
     #get the transformation for the rest pose... or something near it(???)                    
     for translation in fbx_data['P: "Lcl Translation"']:                
         if translation[0]==str(id):
@@ -214,8 +256,55 @@ for index, joint in enumerate(egg_data['Joint']):
             egg_data['Joint'][index]['RotZ']=rotation[1][2]
     for scale in fbx_data['P: "Lcl Scaling"']:        
         if scale[0]==str(id):            
-            egg_data['Joint'][index]['scale']=scale[1]
+            egg_data['Joint'][index]['scale']=scale[1]          
+#getting anim type
+for index, joint in enumerate(egg_data['Joint']):
+    for node in joint['AnimCurveNode']:        
+        id=node[0]
+        for connection in fbx_data['C: ']:           
+            if connection[2]==id:
+                if node[1]==' "Lcl Translation"':                    
+                    if connection[3]==' "d|X"': 
+                        egg_data['Joint'][index]['anim'].append((connection[1],'x'))
+                    elif connection[3]==' "d|Y"':
+                        egg_data['Joint'][index]['anim'].append((connection[1],'y'))
+                    elif connection[3]==' "d|Z"':
+                        egg_data['Joint'][index]['anim'].append((connection[1],'z'))
+                elif node[1]==' "Lcl Rotation"':
+                    if connection[3]==' "d|X"': 
+                        egg_data['Joint'][index]['anim'].append((connection[1],'h'))
+                    elif connection[3]==' "d|Y"':
+                        egg_data['Joint'][index]['anim'].append((connection[1],'r'))
+                    elif connection[3]==' "d|Z"':
+                        egg_data['Joint'][index]['anim'].append((connection[1],'p'))
+                elif node[1]==' "Lcl Scaling"':
+                    if connection[3]==' "d|X"': 
+                        egg_data['Joint'][index]['anim'].append((connection[1],'i'))
+                    elif connection[3]==' "d|Y"':
+                        egg_data['Joint'][index]['anim'].append((connection[1],'j'))
+                    elif connection[3]==' "d|Z"':
+                        egg_data['Joint'][index]['anim'].append((connection[1],'k'))
+                for value in fbx_data['KeyValueFloat']:
+                    if value[0]==connection[1]:
+                        egg_data['Joint'][index]['v'].append(value)
 
+#fill the anims with empty values where needed
+for index, joint in enumerate(egg_data['Joint']): 
+    joint['v'].append(('0',[0]))
+    joint['v'].append(('1',[1]))
+    needed0=['x','y','z','h', 'p', 'r']
+    needed1=['i', 'j', 'k']
+    for anim in joint['anim']:
+        for type in needed0:
+            if type in anim:
+                needed0.pop(needed0.index(type))
+        for type in needed1:
+            if type in anim:
+                needed1.pop(needed0.index(type))        
+    for type in needed0:    
+        joint['anim'].append(('0', type))
+    for type in needed1:    
+        joint['anim'].append(('1', type))    
 #build the data
 for index, group in enumerate(egg_data['Group']):  
     temp_poly=[]
@@ -280,31 +369,37 @@ for index, group in enumerate(egg_data['Group']):
 #At this point we have the vertex membership (weights) in the  egg_data['Vertex'][group_id][vert_id]['membership']
 #but for the egg we need to have the heights per joint with info in what VertexPool the vert is at
 for joint in egg_data["Joint"]:
-    deformer_id=joint['deformer']
-    for group in egg_data['Vertex']:
-        for vert in egg_data['Vertex'][group]:        
-            if deformer_id in vert['membership']:                
-                joint['verts'].append({'vert_id':vert['vert_id'],
-                                      'membership':vert['membership'][deformer_id],
-                                      'group':vert['group_name']})
-
+    if 'deformer' in joint:
+        deformer_id=joint['deformer']
+        for group in egg_data['Vertex']:
+            for vert in egg_data['Vertex'][group]:        
+                if deformer_id in vert['membership']:                
+                    joint['verts'].append({'vert_id':vert['vert_id'],
+                                          'membership':vert['membership'][deformer_id],
+                                          'group':vert['group_name']})
 #write the egg file   
 with open(out_file,'w') as egg:
-    #TODO: get "UpAxis" from FBX
-    egg.write('<CoordinateSystem> { Z-Up }\n\n')
+    egg.write('<CoordinateSystem> {{ {Axis} }}\n\n'.format(**egg_data))
     #Textures
     for tex in egg_data['Texture']:
         for index, temp in enumerate(egg_data['Texture'][tex]):        
             egg.write('<Texture> Tex{0} {{\n'.format(index))
             egg.write('    {file}\n'.format(**egg_data['Texture'][tex][index]))
             #TODO: this should be set in the GUI.. once a GUI exist
-            egg.write('    <Scalar> format { rgb }\n')
-            egg.write('    <Scalar> wrapu { repeat }\n')
-            egg.write('    <Scalar> wrapv { repeat }\n')
-            egg.write('    <Scalar> minfilter { linear_mipmap_linear }\n')
-            egg.write('    <Scalar> magfilter { linear }\n')
+            egg.write('    <Scalar> format {{ {format} }}\n'.format(**egg_data['Texture'][tex][index]))
+            egg.write('    <Scalar> wrapu {{ {wrapu} }}\n'.format(**egg_data['Texture'][tex][index]))
+            egg.write('    <Scalar> wrapv {{ {wrapv} }}\n'.format(**egg_data['Texture'][tex][index]))
+            egg.write('    <Scalar> minfilter {{ {minfilter} }}\n'.format(**egg_data['Texture'][tex][index]))
+            egg.write('    <Scalar> magfilter {{ {magfilter} }}\n'.format(**egg_data['Texture'][tex][index]))
             egg.write('    <Scalar> envtype {{ {type} }}\n'.format(**egg_data['Texture'][tex][index]))
-            #TODO: stage-name, compression, anisotropic-degree, alpha
+            if egg_data['Texture'][tex][index]['stage-name']:
+                egg.write('    <Scalar> stage-name {{ {stage-name} }}\n'.format(**egg_data['Texture'][tex][index]))
+            if egg_data['Texture'][tex][index]['compression']:
+                egg.write('    <Scalar> compression {{ {compression} }}\n'.format(**egg_data['Texture'][tex][index]))
+            if egg_data['Texture'][tex][index]['anisotropic-degree']:
+                egg.write('    <Scalar> anisotropic-degree {{ {anisotropic-degree} }}\n'.format(**egg_data['Texture'][tex][index])) 
+            if egg_data['Texture'][tex][index]['alpha']:
+                egg.write('    <Scalar> alpha {{ {alpha} }}\n'.format(**egg_data['Texture'][tex][index]))                
             egg.write('}\n')
     #a group of all groups             
     if egg_data['Joint']:
@@ -323,16 +418,19 @@ with open(out_file,'w') as egg:
             v_data=egg_data['Vertex'][group['id']][id]
             egg.write('        <Vertex> {0} {{\n'.format(id))
             egg.write('        {xyz[0]} {xyz[1]} {xyz[2]}\n'.format(**v_data))
-            egg.write('            <Normal> {{ {n[0]} {n[1]} {n[2]} }}\n'.format(**v_data))
+            #normal, color, uv, tb could be missing
+            if v_data['n']:    
+                egg.write('            <Normal> {{ {n[0]} {n[1]} {n[2]} }}\n'.format(**v_data))
             if v_data['rgba']:    
                 egg.write('            <RGBA> {{ {rgba[0]} {rgba[1]} {rgba[2]} {rgba[3]} }}\n'.format(**v_data))
-            egg.write('            <UV> {\n')
-            egg.write('                {uv[0]} {uv[1]}\n'.format(**v_data))   
-            if v_data['t']:   
-                egg.write('                <Tangent> {{ {t[0]} {t[1]} {t[2]} }}\n'.format(**v_data))
-            if v_data['b']:    
-                egg.write('                <Binormal> {{ {b[0]} {b[1]} {b[2]} }}\n'.format(**v_data))
-            egg.write('            }\n')            
+            if v_data['uv']:
+                egg.write('            <UV> {\n')
+                egg.write('                {uv[0]} {uv[1]}\n'.format(**v_data))   
+                if v_data['t']:   
+                    egg.write('                <Tangent> {{ {t[0]} {t[1]} {t[2]} }}\n'.format(**v_data))
+                if v_data['b']:    
+                    egg.write('                <Binormal> {{ {b[0]} {b[1]} {b[2]} }}\n'.format(**v_data))
+                egg.write('            }\n')            
             egg.write('        }\n')
         egg.write('    }\n')    
         #polygons    
@@ -349,8 +447,7 @@ with open(out_file,'w') as egg:
                         egg.write('    <TRef> {{ Tex{0} }}\n'.format(i))
             egg.write('    }\n')
         egg.write('}\n')
-    #one actor per file
-    #TODO(?): multiple actors in one file? 
+    #one actor per file!
     if egg_data['Joint']:
         next_joint_id='0'
         indent=''
@@ -371,7 +468,6 @@ with open(out_file,'w') as egg:
                     if 'scale' in joint:
                         egg.write(indent+'        <Scale> {{ {scale[0]} {scale[1]} {scale[2]} }}\n'.format(**joint))  
                     egg.write(indent+'        }\n')
-                    #egg.write(indent+'    }\n')   
                     next_joint_id=joint['id']
                     indent+='    '
                     joint_order.append(joint['id'])
@@ -387,4 +483,65 @@ with open(out_file,'w') as egg:
                         egg.write(indent+'    }\n')                
             egg.write(indent+'}\n')        
     egg.write('}')#close the SceneRoot group
-  
+    
+#write the egg animation file   
+if out_anim_file:
+    with open(out_anim_file,'w') as egg:  
+        egg.write('<CoordinateSystem> {{ {Axis} }}\n\n'.format(**egg_data))
+        egg.write('<Table> {\n')
+        egg.write('    <Bundle> character {\n')
+        egg.write('        <Table> "<skeleton>" {\n')
+        if egg_data['Joint']:
+            next_joint_id='0'
+            indent='            '
+            joint_order=[]
+            while any(d['parent']==next_joint_id for d in egg_data['Joint']):
+                for joint in egg_data['Joint']:
+                    if joint['parent']==next_joint_id:
+                        egg.write(indent+'<Table> {name} {{\n'.format(**joint))
+                        egg.write(indent+'    <Xfm$Anim_S$> xform {\n')
+                        egg.write(indent+'        <Scalar> fps { 30 }\n') #TODO: calculate the fps in the fbx..but how?
+                        egg.write(indent+'        <Char*> order { srpht }\n')#no idea how to get this data :(
+                        for anim in joint['anim']:
+                            egg.write(indent+'        <S$Anim> {0} {{\n'.format(anim[1]))#not in a dict this time
+                            egg.write(indent+'            <V> {')                            
+                            #transfor of the joint neede
+                            transform=0.0
+                            f=add
+                            if anim[1]=="x" and 'translate' in joint:
+                                transform=joint['translate'][0]
+                            elif anim[1]=="y" and 'translate' in joint:
+                                transform=joint['translate'][1]
+                            elif anim[1]=="z" and 'translate' in joint:
+                                transform=joint['translate'][2]
+                            elif anim[1]=="h" and 'RotX' in joint:
+                                transform=joint['RotX']
+                            elif anim[1]=="r" and 'RotY' in joint:
+                                transform=joint['RotY']  
+                            elif anim[1]=="p" and 'RotZ' in joint:
+                                transform=joint['RotZ']  
+                            elif anim[1]=="i" and 'scale' in joint:
+                                transform= joint['scale'][0] 
+                                f=mul
+                            elif anim[1]=="j" and 'scale' in joint:
+                                transform= joint['scale'][1]   
+                                f=mul
+                            elif anim[1]=="k" and 'scale' in joint:
+                                transform= joint['scale'][2]                               
+                                f=mul
+                            for v in joint['v']:
+                                if v[0]==anim[0]:                                    
+                                    for s in v[1]:
+                                        egg.write(str(f(s, transform))+" ")
+                            egg.write('}\n')    
+                            egg.write(indent+'        }\n')
+                        egg.write(indent+'    }\n')   
+                    indent+='    '
+                    joint_order.append(joint['id'])                    
+                    next_joint_id=joint['id']
+            for joint_id in joint_order:
+                indent=indent[:-4] 
+                egg.write(indent+'}\n')
+            egg.write('        }\n')
+            egg.write('    }\n')
+            egg.write('}\n')    
