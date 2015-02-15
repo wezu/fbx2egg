@@ -506,33 +506,39 @@ if out_anim_file:
                             egg.write(indent+'        <S$Anim> {0} {{\n'.format(anim[1]))#not in a dict this time
                             egg.write(indent+'            <V> {')                            
                             #transfor of the joint neede
-                            transform=0.0
-                            f=add
-                            if anim[1]=="x" and 'translate' in joint:
-                                transform=joint['translate'][0]
-                            elif anim[1]=="y" and 'translate' in joint:
-                                transform=joint['translate'][1]
-                            elif anim[1]=="z" and 'translate' in joint:
-                                transform=joint['translate'][2]
-                            elif anim[1]=="h" and 'RotX' in joint:
-                                transform=joint['RotX']
-                            elif anim[1]=="r" and 'RotY' in joint:
-                                transform=joint['RotY']  
-                            elif anim[1]=="p" and 'RotZ' in joint:
-                                transform=joint['RotZ']  
-                            elif anim[1]=="i" and 'scale' in joint:
-                                transform= joint['scale'][0] 
-                                f=mul
-                            elif anim[1]=="j" and 'scale' in joint:
-                                transform= joint['scale'][1]   
-                                f=mul
-                            elif anim[1]=="k" and 'scale' in joint:
-                                transform= joint['scale'][2]                               
-                                f=mul
-                            for v in joint['v']:
-                                if v[0]==anim[0]:                                    
-                                    for s in v[1]:
-                                        egg.write(str(f(s, transform))+" ")
+                            if next_joint_id!='0':
+                                transform=0.0
+                                f=add
+                                if anim[1]=="x" and 'translate' in joint:
+                                    transform=joint['translate'][0]
+                                elif anim[1]=="y" and 'translate' in joint:
+                                    transform=joint['translate'][1]
+                                elif anim[1]=="z" and 'translate' in joint:
+                                    transform=joint['translate'][2]
+                                elif anim[1]=="h" and 'RotX' in joint:
+                                    transform=joint['RotX']
+                                elif anim[1]=="r" and 'RotY' in joint:
+                                    transform=joint['RotY']  
+                                elif anim[1]=="p" and 'RotZ' in joint:
+                                    transform=joint['RotZ']  
+                                elif anim[1]=="i" and 'scale' in joint:
+                                    transform= joint['scale'][0] 
+                                    f=mul
+                                elif anim[1]=="j" and 'scale' in joint:
+                                    transform= joint['scale'][1]   
+                                    f=mul
+                                elif anim[1]=="k" and 'scale' in joint:
+                                    transform= joint['scale'][2]                               
+                                    f=mul
+                                for v in joint['v']:
+                                    if v[0]==anim[0]:                                    
+                                        for s in v[1]:
+                                            egg.write(str(f(s, transform))+" ")
+                            else:                
+                                for v in joint['v']:
+                                    if v[0]==anim[0]:                                    
+                                        for s in v[1]:
+                                            egg.write(str(s)+" ")
                             egg.write('}\n')    
                             egg.write(indent+'        }\n')
                         egg.write(indent+'    }\n')   
