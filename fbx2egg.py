@@ -3,8 +3,30 @@ import os, sys
 def add(s1, s2):
     return float(s1)+float(s2)
 def mul(s1, s2):
+    print s1, "x", s2
     return float(s1)*float(s2)
-    
+
+def getParentTransform(parent_id, egg_data, total):
+    for joint in egg_data["Joint"]:
+        if joint['id']==parent_id:
+            if 'translate' in joint:
+                total['translate'].append(joint['translate'])
+            if 'RotX' in joint:
+                total['RotX'].append(joint['RotX'])
+            if 'RotY' in joint:
+                total['RotY'].append(joint['RotY'])  
+            if 'RotZ' in joint:
+                total['RotZ'].append(joint['RotZ'])  
+            if 'scale' in joint:
+                total['scale'].append(joint['scale'])
+            #getParentTransform(joint['parent'], egg_data, total)
+                
+def getNextJointId(current_id, next_id,  joint_order, egg_data):
+    for joint in egg_data['Joint']:
+        if joint['parent']==current_id and joint['id'] not in joint_order:
+            return current_id
+    return next_id 
+
 def getTransform(line):
     if fbx_data['Model:']:
         if fbx_data['Model:'][-1][2]=='"LimbNode"':
@@ -377,6 +399,13 @@ for joint in egg_data["Joint"]:
                     joint['verts'].append({'vert_id':vert['vert_id'],
                                           'membership':vert['membership'][deformer_id],
                                           'group':vert['group_name']})
+#get the transform of all parent joints                                          
+for joint in egg_data["Joint"]:
+    total={'translate':[], 'RotX':[], 'RotY':[], 'RotZ':[], 'scale':[]}
+    getParentTransform(joint['id'], egg_data, total)
+    #getParentTransform(joint['parent'], egg_data, total)
+    joint['total_transform']=total        
+            
 #write the egg file   
 with open(out_file,'w') as egg:
     egg.write('<CoordinateSystem> {{ {Axis} }}\n\n'.format(**egg_data))
@@ -496,12 +525,12 @@ if out_anim_file:
             indent='            '
             joint_order=[]
             while any(d['parent']==next_joint_id for d in egg_data['Joint']):
-                for joint in egg_data['Joint']:
-                    if joint['parent']==next_joint_id:
+                for joint in egg_data['Joint']:                       
+                    if joint['parent']==next_joint_id and joint['id'] not in joint_order:
                         egg.write(indent+'<Table> {name} {{\n'.format(**joint))
                         egg.write(indent+'    <Xfm$Anim_S$> xform {\n')
                         egg.write(indent+'        <Scalar> fps { 30 }\n') #TODO: calculate the fps in the fbx..but how?
-                        egg.write(indent+'        <Char*> order { srpht }\n')#no idea how to get this data :(
+                        egg.write(indent+'        <Char*> order { strph }\n')#no idea how to get this data :(
                         for anim in joint['anim']:
                             egg.write(indent+'        <S$Anim> {0} {{\n'.format(anim[1]))#not in a dict this time
                             egg.write(indent+'            <V> {')                            
@@ -509,27 +538,47 @@ if out_anim_file:
                             if next_joint_id!='0':
                                 transform=0.0
                                 f=add
-                                if anim[1]=="x" and 'translate' in joint:
-                                    transform=joint['translate'][0]
-                                elif anim[1]=="y" and 'translate' in joint:
-                                    transform=joint['translate'][1]
-                                elif anim[1]=="z" and 'translate' in joint:
-                                    transform=joint['translate'][2]
-                                elif anim[1]=="h" and 'RotX' in joint:
-                                    transform=joint['RotX']
-                                elif anim[1]=="r" and 'RotY' in joint:
-                                    transform=joint['RotY']  
-                                elif anim[1]=="p" and 'RotZ' in joint:
-                                    transform=joint['RotZ']  
-                                elif anim[1]=="i" and 'scale' in joint:
-                                    transform= joint['scale'][0] 
+                                if anim[1]=="x" and joint['total_transform']['translate']:
+                                    if len(joint['total_transform']['translate'])!=1: 
+                                        transform= reduce( lambda x, y: float(x[0])+float(y[0]), joint['total_transform']['translate'])
+                                    else:
+                                        transform=joint['total_transform']['translate'][0][0]
+                                elif anim[1]=="y" and joint['total_transform']['translate']:
+                                    if len(joint['total_transform']['translate'])!=1: 
+                                        transform= reduce( lambda x, y: float(x[1])+float(y[1]), joint['total_transform']['translate'])
+                                    else:
+                                        transform=joint['total_transform']['translate'][0][1]
+                                elif anim[1]=="z" and joint['total_transform']['translate']:
+                                    if len(joint['total_transform']['translate'])!=1: 
+                                        transform= reduce( lambda x, y: float(x[2])+float(y[2]), joint['total_transform']['translate'])
+                                    else:
+                                        transform=joint['total_transform']['translate'][0][2]
+                                elif anim[1]=="h" and joint['total_transform']['RotX']:
+                                    transform= reduce( lambda x, y: float(x)+float(y), joint['total_transform']['RotX'])
+                                elif anim[1]=="r" and joint['total_transform']['RotY']:
+                                    transform= reduce( lambda x, y: float(x)+float(y), joint['total_transform']['RotY'])
+                                elif anim[1]=="p" and joint['total_transform']['RotZ']:
+                                    transform= reduce( lambda x, y: float(x)+float(y), joint['total_transform']['RotZ'])
+                                elif anim[1]=="i" and joint['total_transform']['scale']:
+                                    print len(joint['total_transform']['scale'])
+                                    if len(joint['total_transform']['scale'])!=1: 
+                                        transform= reduce( lambda x, y: float(x[0])*float(y[0]), joint['total_transform']['scale'])
+                                    else:
+                                        transform=joint['total_transform']['scale'][0][0]
                                     f=mul
-                                elif anim[1]=="j" and 'scale' in joint:
-                                    transform= joint['scale'][1]   
+                                elif anim[1]=="j" and joint['total_transform']['scale']:
+                                    if len(joint['total_transform']['scale'])!=1: 
+                                        transform= reduce( lambda x, y: float(x[1])*float(y[1]), joint['total_transform']['scale'])
+                                    else:
+                                        transform=joint['total_transform']['scale'][0][1]
                                     f=mul
-                                elif anim[1]=="k" and 'scale' in joint:
-                                    transform= joint['scale'][2]                               
+                                elif anim[1]=="k" and joint['total_transform']['scale']:                                    
+                                    if len(joint['total_transform']['scale'])!=1: 
+                                        transform= reduce( lambda x, y: float(x[2])*float(y[2]), joint['total_transform']['scale'])
+                                    else:
+                                        transform=joint['total_transform']['scale'][0][2]
                                     f=mul
+                                print anim[1], transform    
                                 for v in joint['v']:
                                     if v[0]==anim[0]:                                    
                                         for s in v[1]:
@@ -543,8 +592,8 @@ if out_anim_file:
                             egg.write(indent+'        }\n')
                         egg.write(indent+'    }\n')   
                     indent+='    '
-                    joint_order.append(joint['id'])                    
-                    next_joint_id=joint['id']
+                    joint_order.append(joint['id'])
+                    next_joint_id=getNextJointId(next_joint_id,joint['id'],joint_order,egg_data)                    
             for joint_id in joint_order:
                 indent=indent[:-4] 
                 egg.write(indent+'}\n')
